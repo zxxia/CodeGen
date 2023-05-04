@@ -3,11 +3,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
 
+import csv
 import os
 import re
 import time
 import random
 import argparse
+from time import perf_counter_ns
 
 import torch
 
@@ -96,6 +98,8 @@ def sample(
     model,
     tokenizer,
     context,
+    batch_size,
+    input_ids_len,
     pad_token_id,
     num_return_sequences=1,
     temp=0.2,
@@ -104,13 +108,17 @@ def sample(
     max_length=2048
 ):
 
-    input_ids = tokenizer(
-        context,
-        truncation=True,
-        padding=True,
-        max_length=max_length,
-        return_tensors='pt',
-    ).input_ids
+    # input_ids = tokenizer(
+    #     context,
+    #     truncation=True,
+    #     padding=True,
+    #     max_length=max_length,
+    #     return_tensors='pt',
+    # ).input_ids
+    # batch_size = 8
+    # input_ids_len = 512
+    # max_length_sample = 2  # num of tokens to be generated from the model.
+    input_ids = (torch.rand((batch_size, input_ids_len)) * 10000).long()  # .cuda()
 
     input_ids_len = input_ids.shape[1]
     assert input_ids_len < max_length
@@ -127,6 +135,7 @@ def sample(
             pad_token_id=pad_token_id,
             use_cache=True,
         )
+        print(tokens.shape)
         text = tokenizer.batch_decode(tokens[:, input_ids_len:, ...])
 
     return text
@@ -197,9 +206,12 @@ def main():
     parser.add_argument('--t', type=float, default=0.2)
     parser.add_argument('--max-length', type=int, default=128)
     parser.add_argument('--batch-size', type=int, default=1)
+    parser.add_argument('--num-return-sequences', type=int, default=1)
     parser.add_argument('--no-fp16', action="store_true")
     parser.add_argument('--pad', type=int, default=50256)
     parser.add_argument('--context', type=str, default='def helloworld():')
+    parser.add_argument('--output_file_path', type=str)
+    parser.add_argument('--output_file_name', type=str)
     args = parser.parse_args()
 
 
@@ -208,7 +220,7 @@ def main():
     set_env()
     set_seed(args.rng_seed, deterministic=args.rng_deterministic)
     device = torch.device(args.device)
-    
+
     use_fp16 = True
     if (args.no_fp16 or device.type == "cpu"):
         use_fp16 = False
@@ -233,18 +245,42 @@ def main():
         tokenizer.padding_side = 'left'
         tokenizer.pad_token = args.pad
 
+    if args.output_file_name and args.output_file_path:
+
+        csv_filename = os.path.join(
+            args.output_file_path, args.output_file_name + ".csv")
+        csv_fh = open(csv_filename, 'w')
+        csv_writer = csv.writer(csv_fh, lineterminator='\n')
+        csv_writer.writerow(
+            ['start_timestamp_ns', 'end_timestamp_ns', 'jct_ms',
+             'max_allocated_gpu_memory_allocated_byte',
+             'max_reserved_gpu_memory_byte'])
 
     # (4) sample
+    while True:
+        with print_time('sampling'):
+            start_t: int = perf_counter_ns()
+            completion = sample(
+                device=device, model=model, tokenizer=tokenizer,
+                context=args.context,
+                batch_size=args.batch_size,
+                input_ids_len=512,
+                pad_token_id=args.pad,
+                num_return_sequences=args.num_return_sequences,
+                temp=args.t, top_p=args.p, max_length_sample=args.max_length)[0]
+            end_t: int = perf_counter_ns()
 
-    with print_time('sampling'):
-        completion = sample(device=device, model=model, tokenizer=tokenizer, context=args.context, pad_token_id=args.pad, num_return_sequences=args.batch_size, temp=args.t, top_p=args.p, max_length_sample=args.max_length)[0]
-        truncation = truncate(completion)
+            if args.output_file_name and args.output_file_path:
+                csv_writer.writerow([
+                    start_t, end_t, (end_t - start_t) / 1000000])
+                csv_fh.flush()
+            truncation = truncate(completion)
 
-        print('=' * 100)
-        print(completion)
-        print('=' * 100)
-        print(args.context+truncation)
-        print('=' * 100)
+            print('=' * 100)
+            print(completion)
+            print('=' * 100)
+            print(args.context+truncation)
+            print('=' * 100)
 
 
 
