@@ -79,8 +79,15 @@ source .venv/bin/activate
 pip3 install --upgrade pip setuptools
 pip3 install -r requirements.txt
 
+mkdir -p .cache/gpt2
+cd .cache/gpt2
+wget https://huggingface.co/gpt2/resolve/main/tokenizer.json
+wget https://huggingface.co/gpt2/resolve/main/vocab.json
+wget https://huggingface.co/gpt2/resolve/main/config.json
+cd ../../
+
 # sample from the model with an arbitrary context
-python3 -m jaxformer.hf.sample --model codegen-350M-mono --context "def hello_world():"
+# python3 -m jaxformer.hf.sample --model codegen-350M-mono --context "def hello_world():"
 ```
 
 ## Citation
