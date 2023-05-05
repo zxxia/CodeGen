@@ -68,7 +68,9 @@ def create_model(ckpt, fp16=True):
 
 
 def create_tokenizer():
-    t = GPT2TokenizerFast.from_pretrained('gpt2')
+    # t = GPT2TokenizerFast.from_pretrained('gpt2', cache_dir='.cache/transformers/', local_files_only=True)
+    # t = GPT2TokenizerFast.from_pretrained('.cache/transformers/')
+    t = GPT2TokenizerFast.from_pretrained('.cache/gpt2/')
     t.max_model_input_sizes['gpt2'] = 1e20
     return t
 
