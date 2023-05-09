@@ -9,6 +9,7 @@ import re
 import time
 import random
 import argparse
+from ctypes import cdll
 from time import perf_counter_ns
 
 import torch
@@ -107,7 +108,9 @@ def sample(
     temp=0.2,
     top_p=0.95,
     max_length_sample=128,
-    max_length=2048
+    max_length=2048,
+    control=False,
+    priority=0
 ):
 
     # input_ids = tokenizer(
@@ -137,7 +140,7 @@ def sample(
             pad_token_id=pad_token_id,
             use_cache=True,
         )
-        print(tokens.shape)
+        # print(tokens.shape)
         text = tokenizer.batch_decode(tokens[:, input_ids_len:, ...])
 
     return text
@@ -214,6 +217,8 @@ def main():
     parser.add_argument('--context', type=str, default='def helloworld():')
     parser.add_argument('--output_file_path', type=str)
     parser.add_argument('--output_file_name', type=str)
+    parser.add_argument('--control', action='store_true')
+    parser.add_argument('--priority', type=int, default=0)
     args = parser.parse_args()
 
 
@@ -234,6 +239,11 @@ def main():
 
 
     # (3) load
+    if args.control and args.priority > 0:
+        print('load libgeek.so', flush=True)
+        lib = cdll.LoadLibrary(os.path.abspath("../gpu_sched_new/gpu-sched-exp/pytcppexp/libgeek.so"))
+    else:
+        lib = None
 
     with print_time('loading parameters'):
         model = create_model(ckpt=ckpt, fp16=use_fp16).to(device)
@@ -257,32 +267,41 @@ def main():
             ['start_timestamp_ns', 'end_timestamp_ns', 'jct_ms',
              'max_allocated_gpu_memory_allocated_byte',
              'max_reserved_gpu_memory_byte'])
-
     # (4) sample
     while True:
-        with print_time('sampling'):
-            start_t: int = perf_counter_ns()
-            completion = sample(
-                device=device, model=model, tokenizer=tokenizer,
-                context=args.context,
-                batch_size=args.batch_size,
-                input_ids_len=512,
-                pad_token_id=args.pad,
-                num_return_sequences=args.num_return_sequences,
-                temp=args.t, top_p=args.p, max_length_sample=args.max_length)[0]
-            end_t: int = perf_counter_ns()
+        # with print_time('sampling'):
+        if lib is not None:
+            try:
+                lib.setMem(1)
+            except Exception as e:
+                print(e)
+        start_t: int = perf_counter_ns()
+        completion = sample(
+            device=device, model=model, tokenizer=tokenizer,
+            context=args.context,
+            batch_size=args.batch_size,
+            input_ids_len=512,
+            pad_token_id=args.pad,
+            num_return_sequences=args.num_return_sequences,
+            temp=args.t, top_p=args.p, max_length_sample=args.max_length)[0]
+        end_t: int = perf_counter_ns()
+        if lib is not None:
+            try:
+                lib.setMem(0)
+            except Exception as e:
+                print(e)
 
-            if args.output_file_name and args.output_file_path:
-                csv_writer.writerow([
-                    start_t, end_t, (end_t - start_t) / 1000000])
-                csv_fh.flush()
-            truncation = truncate(completion)
+        if args.output_file_name and args.output_file_path:
+            csv_writer.writerow([
+                start_t, end_t, (end_t - start_t) / 1000000])
+            csv_fh.flush()
+        truncation = truncate(completion)
 
-            print('=' * 100)
-            print(completion)
-            print('=' * 100)
-            print(args.context+truncation)
-            print('=' * 100)
+        # print('=' * 100)
+        # print(completion)
+        # print('=' * 100)
+        # print(args.context+truncation)
+        # print('=' * 100)
 
 
 
