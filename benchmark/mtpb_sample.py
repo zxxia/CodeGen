@@ -19,14 +19,18 @@ python3 mtpb_sample.py
 """
 
 import argparse
+from ctypes import cdll
 import json
 import os
+import sys
 from pathlib import Path
 import random
-from time import time
+from time import time, sleep, perf_counter_ns
+from tqdm import tqdm
 
 import torch
 
+lib = None
 
 ########################################################################
 # util
@@ -37,11 +41,13 @@ class print_time:
         self.desc = desc
 
     def __enter__(self):
-        print(self.desc)
+        if self.desc != "":
+            print(self.desc)
         self.t = time()
 
     def __exit__(self, type, value, traceback):
-        print(f"{self.desc} took {time()-self.t:.02f}s")
+        if self.desc != "":
+            print(f"{self.desc} took {time()-self.t:.02f}s")
 
 
 def set_env():
@@ -88,7 +94,8 @@ def create_model(ckpt, fp16=True):
 
 
 def create_tokenizer():
-    t = GPT2TokenizerFast.from_pretrained('gpt2')
+    # t = GPT2TokenizerFast.from_pretrained('gpt2')
+    t = GPT2TokenizerFast.from_pretrained('.cache/gpt2/',  model_max_length=512)
     t.max_model_input_sizes['gpt2'] = 1e20
     return t
 
@@ -157,7 +164,7 @@ def sample(
 
 def truncate(completion):
     import re
-    
+
     def find_re(string, pattern, start_pos):
         m = pattern.search(string, start_pos)
         return m.start() if m else -1
@@ -178,7 +185,7 @@ def truncate(completion):
     if len(terminals_pos) > 0:
         return completion[:min(terminals_pos)]
     else:
-        return completion   
+        return completion
 
 
 def test_truncate():
@@ -228,6 +235,19 @@ def sample_completions(
     max_gen_length=256,
     prefix = "# Import libraries.\n\nimport numpy as np\n\n"
 ):
+    completions = sample(
+        device,
+        model,
+        tokenizer,
+        "def helloworld()",
+        num_return_sequences=1,
+        top_p=p,
+        temp=t,
+        pad_token_id=pad_token_id,
+        max_length=max_length,
+        max_gen_length=max_gen_length
+    )
+    global lib
 
     with print_time("sample completions"):
 
@@ -235,9 +255,9 @@ def sample_completions(
 
         for i, problem in enumerate(problem_set):
 
-            if os.path.exists(out_file(problem['id'])):
-                print(f'skipping problem {problem["id"]}')
-                continue
+            # if os.path.exists(out_file(problem['id'])):
+            #     print(f'skipping problem {problem["id"]}')
+            #     continue
 
             samples = []
 
@@ -255,16 +275,23 @@ def sample_completions(
                 filled_prompts = [
                     ([p.format(**input) for p in problem["prompts"]], input, output) for (input, output) in zip(problem["inputs"], problem["outputs"])
                 ]
+                for k, (prompts, input, output) in enumerate(filled_prompts):
+                    for l, prompt in enumerate(prompts):
+                        print(prompt, flush=True)
+                    break
 
                 for k, (prompts, input, output) in enumerate(filled_prompts):
 
                     histories = [prefix for _ in range(batch_size if j != num_batches else remainder)]
                     histories_full = [[prefix] for _ in range(batch_size if j != num_batches else remainder)]
 
-                    for l, prompt in enumerate(prompts):
+                    if lib is not None:
+                        lib.setMem(1)
+                    start_t: int = perf_counter_ns()
+                    for l, prompt in tqdm(enumerate(prompts), total=len(prompts)):
 
                         histories = [h + wrap(prompt) for h in histories]
-                        histories_full = [h + [wrap(prompt)] for h in histories_full] 
+                        histories_full = [h + [wrap(prompt)] for h in histories_full]
 
                         completions = sample(
                             device,
@@ -282,11 +309,13 @@ def sample_completions(
                         histories = [h + f"{truncate(c)}\n\n" for h, c in zip(histories, completions)]
                         histories_full = [h + [f"{truncate(c)}\n\n"] for h, c in zip(histories_full, completions)]
 
-                        print('-' * 10)
-                        print(l)
-                        print('-' * 10)
-                        print(histories[0])
-                        print('-' * 10)
+                        # print(l)
+                        # print('-' * 10)
+                        # print(histories[0])
+                        # print('-' * 10)
+                    print('-' * 10)
+                    print(histories)
+                    print('-' * 10)
 
                     for history, history_full in zip(histories, histories_full):
                         samples.append(
@@ -298,6 +327,16 @@ def sample_completions(
                                 "prompts_completions": history_full
                             }
                         )
+                    end_t: int = perf_counter_ns()
+                    print('Finish problem {} used {:.3f}s'.format(
+                        problem['id'], (end_t - start_t) / 1000000000))
+                    if lib is not None:
+                        lib.setMem(0)
+                    sys.stdout.flush()
+                    sleep(2)
+
+                    break  # only generate on one (prompts, input, output)
+
 
             write_jsonl(out_file(problem['id']), samples)
 
@@ -331,7 +370,7 @@ def main():
     rng_deterministic = True
 
     # (1) env
-    
+
     set_env()
 
     def bind_set_seed(seed=args.seed):
@@ -345,10 +384,16 @@ def main():
     with print_time("load tokenization"):
         tokenizer = create_custom_gpt2_tokenizer()
 
+    # if args.control and args.priority > 0:
+    global lib
+    # print('load libgeek.so', flush=True)
+    lib = cdll.LoadLibrary(os.path.abspath("../gpu_sched_new/gpu-sched-exp/pytcppexp/libgeek.so"))
+    # else:
+    #     lib = None
 
     # (3) sample
 
-    with print_time("sampling"):
+    with print_time(""):
         problem_set = create_problem_set(args.problem_path, args.problem_ids)
 
         print(f'loaded {len(problem_set)} problems')
