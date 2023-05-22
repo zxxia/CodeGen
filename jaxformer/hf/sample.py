@@ -6,6 +6,7 @@
 import csv
 import os
 import re
+import signal
 import time
 import random
 import argparse
@@ -17,8 +18,11 @@ import torch
 from transformers import GPT2TokenizerFast
 from jaxformer.hf.codegen.modeling_codegen import CodeGenForCausalLM
 
+RUNNING = True
 
-
+def signal_handler(sig, frame):
+    global RUNNING
+    RUNNING = False
 ########################################################################
 # util
 
@@ -192,6 +196,7 @@ def test_truncate():
 
 
 def main():
+    signal.signal(signal.SIGINT, signal_handler)
 
     # (0) constants
 
@@ -261,14 +266,15 @@ def main():
 
         csv_filename = os.path.join(
             args.output_file_path, args.output_file_name + ".csv")
-        csv_fh = open(csv_filename, 'w')
+        csv_fh = open(csv_filename, 'w', 1)
         csv_writer = csv.writer(csv_fh, lineterminator='\n')
         csv_writer.writerow(
             ['start_timestamp_ns', 'end_timestamp_ns', 'jct_ms',
              'max_allocated_gpu_memory_allocated_byte',
              'max_reserved_gpu_memory_byte'])
     # (4) sample
-    while True:
+    global RUNNING
+    while RUNNING:
         # with print_time('sampling'):
         if lib is not None:
             try:
