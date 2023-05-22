@@ -272,7 +272,9 @@ def main():
         # with print_time('sampling'):
         if lib is not None:
             try:
-                lib.setMem(1)
+                suffix = os.getenv("SUFFIX", None)
+                assert suffix is not None
+                lib.setMem(1, suffix.encode())
             except Exception as e:
                 print(e)
         start_t: int = perf_counter_ns()
@@ -287,7 +289,8 @@ def main():
         end_t: int = perf_counter_ns()
         if lib is not None:
             try:
-                lib.setMem(0)
+                assert suffix is not None
+                lib.setMem(0, suffix.encode())
             except Exception as e:
                 print(e)
 
