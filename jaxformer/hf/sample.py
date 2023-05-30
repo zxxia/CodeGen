@@ -15,7 +15,7 @@ from time import perf_counter_ns
 
 import torch
 
-from transformers import GPT2TokenizerFast
+from transformers import GPT2TokenizerFast, AutoTokenizer, BloomTokenizerFast
 from jaxformer.hf.codegen.modeling_codegen import CodeGenForCausalLM
 
 RUNNING = True
@@ -67,7 +67,7 @@ def cast(model, fp16=True):
 
 def create_model(ckpt, fp16=True):
     if fp16:
-        return CodeGenForCausalLM.from_pretrained(ckpt, revision='float16', torch_dtype=torch.float16, low_cpu_mem_usage=True)
+        return CodeGenForCausalLM.from_pretrained(ckpt, revision='float16', torch_dtype=torch.float16)
     else:
         return CodeGenForCausalLM.from_pretrained(ckpt)
 
@@ -189,6 +189,16 @@ def test_truncate():
 
     assert truncate('\nif len_a > len_b:\n    result = a\nelse:\n    result = b\n\n\n\n#') == '\nif len_a > len_b:\n    result = a\nelse:\n    result = b'
 
+# https://github.com/netx-repo/PipeSwitch/blob/f321d399e501b79ad51da13074e2aecda36cb06a/pipeswitch/worker_common.py#L40
+def insert_layer_level_sync(mod):
+    def hook_terminate(mod, input, output):
+        torch.cuda.synchronize()
+        print("added sync")
+    if len(list(mod.children())) == 0:
+        mod.register_forward_hook(hook_terminate)
+    else:
+        for child in mod.children():
+            insert_layer_level_sync(child)
 
 
 ########################################################################
@@ -224,6 +234,7 @@ def main():
     parser.add_argument('--output_file_name', type=str)
     parser.add_argument('--control', action='store_true')
     parser.add_argument('--priority', type=int, default=0)
+    parser.add_argument('--sync-level', type=str, default='kernel')
     args = parser.parse_args()
 
 
@@ -252,6 +263,8 @@ def main():
 
     with print_time('loading parameters'):
         model = create_model(ckpt=ckpt, fp16=use_fp16).to(device)
+        if args.sync_level == "layer":
+            insert_layer_level_sync(model)
 
 
     with print_time('loading tokenizer'):
@@ -305,6 +318,7 @@ def main():
                 start_t, end_t, (end_t - start_t) / 1000000])
             csv_fh.flush()
         truncation = truncate(completion)
+        # sleep(1)
 
         # print('=' * 100)
         # print(completion)
@@ -313,8 +327,8 @@ def main():
         # print('=' * 100)
 
 
-
 if __name__ == '__main__':
     test_truncate()
     main()
     print('done.')
+

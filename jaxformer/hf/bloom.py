@@ -175,7 +175,16 @@ def test_truncate():
 
     assert truncate('\nif len_a > len_b:\n    result = a\nelse:\n    result = b\n\n\n\n#') == '\nif len_a > len_b:\n    result = a\nelse:\n    result = b'
 
-
+# https://github.com/netx-repo/PipeSwitch/blob/f321d399e501b79ad51da13074e2aecda36cb06a/pipeswitch/worker_common.py#L40
+def insert_layer_level_sync(mod):
+    def hook_terminate(mod, input, output):
+        torch.cuda.synchronize()
+        # print("added sync")
+    if len(list(mod.children())) == 0:
+        mod.register_forward_hook(hook_terminate)
+    else:
+        for child in mod.children():
+            insert_layer_level_sync(child)
 
 ########################################################################
 # main
@@ -208,6 +217,7 @@ def main():
     parser.add_argument('--output_file_name', type=str)
     parser.add_argument('--control', action='store_true')
     parser.add_argument('--priority', type=int, default=0)
+    parser.add_argument('--sync-level', type=str, default='kernel')
     args = parser.parse_args()
 
 
@@ -236,6 +246,8 @@ def main():
 
     with print_time('loading parameters'):
         model = create_model().to(device)
+        if args.sync_level == "layer":
+            insert_layer_level_sync(model)
 
 
     with print_time('loading tokenizer'):
